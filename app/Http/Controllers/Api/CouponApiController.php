@@ -13,8 +13,14 @@ class CouponApiController extends Controller
 
     public function index()
     {
-        $coupons = Coupon::where('status', 'active')
-            ->where('expiry_date', '>=', now())
+        $today = now();
+        $coupons = Coupon::where('is_active', 1)
+            ->where('start_date', '<=', $today)
+            ->where('end_date', '>=', $today)
+            ->where(function($q) {
+                $q->whereNull('max_uses')
+                  ->orWhereColumn('used_count', '<', 'max_uses');
+            })
             ->get();
             
         return $this->success($coupons, 'Lấy danh sách mã giảm giá thành công');

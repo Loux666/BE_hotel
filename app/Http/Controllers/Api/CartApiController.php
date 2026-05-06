@@ -24,9 +24,7 @@ class CartApiController extends Controller
 
     public function index(Request $request)
     {
-        $userId = $request->user()->id;
-        $cartItems = Cart::with(['room.hotel', 'room.images'])->where('user_id', $userId)->get();
-
+        $cartItems = $this->cartService->getCart($request->user()->id);
         return $this->success(CartResource::collection($cartItems), 'Lấy danh sách giỏ hàng thành công');
     }
 
@@ -38,9 +36,8 @@ class CartApiController extends Controller
                 $request->validated()
             );
 
-            return $this->success($cart, 'Đã thêm vào giỏ hàng', 201);
+            return $this->success(new CartResource($cart), 'Đã thêm vào giỏ hàng', 201);
         } catch (Exception $e) {
-            // Dùng code 409 nếu lỗi do trùng phòng
             $code = $e->getCode() == 409 ? 409 : 400;
             return $this->error($e->getMessage(), $code);
         }
@@ -48,11 +45,28 @@ class CartApiController extends Controller
 
     public function destroy(Request $request, $id)
     {
-        $item = Cart::where('id', $id)->where('user_id', $request->user()->id)->first();
-        if (!$item) {
+        $deleted = $this->cartService->removeFromCart($request->user()->id, $id);
+        if (!$deleted) {
             return $this->error('Không tìm thấy mục trong giỏ hàng', 404);
         }
-        $item->delete();
         return $this->success(null, 'Đã xoá mục khỏi giỏ hàng');
+    }
+
+    public function verify(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer'
+        ]);
+
+        $invalidIds = $this->cartService->verifyAvailability($request->user()->id, $request->ids);
+
+        if (count($invalidIds) > 0) {
+            return $this->error('Một số phòng không còn khả dụng', 409, [
+                'invalid_ids' => $invalidIds
+            ]);
+        }
+
+        return $this->success(null, 'Tất cả các phòng đã chọn đều khả dụng');
     }
 }

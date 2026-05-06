@@ -36,4 +36,9 @@ class BookingDetail extends Model
     {
         return $this->belongsTo(Room::class);
     }
+
+    public function feedback()
+    {
+        return $this->hasOne(Feedback::class, 'booking_detail_id');
+    }
 }

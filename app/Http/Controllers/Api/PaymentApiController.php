@@ -6,10 +6,44 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Traits\ApiResponser;
 use App\Models\Booking;
+use App\Services\PaymentService;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\BookingSuccessMail;
+use App\Models\RoomAvailability;
+use Carbon\Carbon;
 
 class PaymentApiController extends Controller
 {
     use ApiResponser;
+
+    protected $paymentService;
+
+    public function __construct(PaymentService $paymentService)
+    {
+        $this->paymentService = $paymentService;
+    }
+
+    public function paymentStatus(Request $request)
+    {
+        $request->validate([
+            'booking_id' => 'required|exists:bookings,id',
+        ]);
+
+        $booking = Booking::where('id', $request->booking_id)
+            ->where('user_id', $request->user()->id)
+            ->first();
+
+        if (!$booking) {
+            return $this->error('Không tìm thấy booking', 404);
+        }
+
+        return $this->success([
+            'booking_id' => $booking->id,
+            'status' => $booking->status,
+            'payment_status' => $booking->payment_status,
+        ], 'Lấy trạng thái thanh toán thành công');
+    }
 
     public function initPayment(Request $request)
     {
@@ -24,58 +58,29 @@ class PaymentApiController extends Controller
             return $this->error('Đơn hàng không hợp lệ hoặc đã xử lý', 400);
         }
 
-        if ($request->method == 'offline') {
-            $booking->update(['status' => 'confirmed', 'expired_at' => null]);
-            return $this->success(null, 'Đặt phòng thành công (trả sau)');
+        if ($request->input('method') == 'offline') {
+            $this->paymentService->finalizeBooking($booking);
+            return $this->success(null, 'Đặt phòng thành công (thanh toán tại khách sạn)');
         }
 
-        $vnp_TmnCode = config('services.vnpay.tmn_code');
-        $vnp_HashSecret = config('services.vnpay.hash_secret');
-        $vnp_Url = config('services.vnpay.url');
-        $vnp_Returnurl = url('/api/payments/vnpay/callback');
+        // Khởi tạo VNPAY
+        $paymentUrl = $this->paymentService->createVnpayUrl($booking, $request->ip());
 
-        $inputData = [
-            "vnp_Version" => "2.1.0",
-            "vnp_TmnCode" => $vnp_TmnCode,
-            "vnp_Amount" => $booking->total_price * 100,
-            "vnp_Command" => "pay",
-            "vnp_CreateDate" => now()->format('YmdHis'),
-            "vnp_CurrCode" => "VND",
-            "vnp_IpAddr" => $request->ip(),
-            "vnp_Locale" => "vn",
-            "vnp_OrderInfo" => "Thanh toan GD " . $booking->id,
-            "vnp_OrderType" => "billpayment",
-            "vnp_ReturnUrl" => $vnp_Returnurl,
-            "vnp_TxnRef" => $booking->id,
-        ];
-
-        ksort($inputData);
-        $hashdata = '';
-        foreach ($inputData as $key => $value) {
-            $hashdata .= ($hashdata ? '&' : '') . urlencode($key) . '=' . urlencode($value);
-        }
-
-        $vnpSecureHash = hash_hmac('sha512', $hashdata, $vnp_HashSecret);
-        $finalUrl = $vnp_Url . '?' . http_build_query($inputData) . '&vnp_SecureHash=' . $vnpSecureHash;
-
-        return $this->success(['payment_url' => $finalUrl], 'Khởi tạo thanh toán thành công');
+        return $this->success(['payment_url' => $paymentUrl], 'Khởi tạo thanh toán VNPAY thành công');
     }
 
     public function vnpayCallback(Request $request)
     {
-        $inputData = $request->all();
-        $bookingId = $inputData['vnp_TxnRef'] ?? null;
-        
-        if ($bookingId && isset($inputData['vnp_ResponseCode']) && $inputData['vnp_ResponseCode'] === '00') {
-             Booking::where('id', $bookingId)->update([
-                 'status' => 'confirmed',
-                 'payment_status' => 'paid',
-                 'expired_at' => null
-             ]);
-             
-             return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/payment/status?success=true&booking_id=' . $bookingId);
+        try {
+            $booking = $this->paymentService->handleVnpayCallback($request->all());
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:5173') . '/payment/status?success=true&booking_id=' . $booking->id;
+            return redirect($frontendUrl);
+        } catch (\Exception $e) {
+            Log::error('VNPAY Callback Error: ' . $e->getMessage());
+            $bookingId = $request->query('vnp_TxnRef');
+            $frontendUrl = env('FRONTEND_URL', 'http://localhost:5173') . '/payment/status?success=false&message=' . urlencode($e->getMessage());
+            if ($bookingId) $frontendUrl .= '&booking_id=' . $bookingId;
+            return redirect($frontendUrl);
         }
-
-        return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/payment/status?success=false&booking_id=' . $bookingId);
     }
 }
