@@ -49,7 +49,7 @@ class PaymentApiController extends Controller
     {
         $request->validate([
             'booking_id' => 'required|exists:bookings,id',
-            'method' => 'required|in:vnpay,offline'
+            'method' => 'required|in:vnpay,offline,sepay'
         ]);
 
         $booking = Booking::find($request->booking_id);
@@ -61,6 +61,11 @@ class PaymentApiController extends Controller
         if ($request->input('method') == 'offline') {
             $this->paymentService->finalizeBooking($booking);
             return $this->success(null, 'Đặt phòng thành công (thanh toán tại khách sạn)');
+        }
+
+        if ($request->input('method') == 'sepay') {
+            $sepayInfo = $this->paymentService->createSePayInfo($booking);
+            return $this->success($sepayInfo, 'Lấy thông tin thanh toán SePay thành công');
         }
 
         // Khởi tạo VNPAY

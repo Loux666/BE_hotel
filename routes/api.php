@@ -32,6 +32,7 @@ Route::post('/contact', [\App\Http\Controllers\Api\ContactApiController::class, 
 
 // Payment Callbacks
 Route::get('/payments/vnpay/callback', [PaymentApiController::class, 'vnpayCallback']);
+Route::post('/payments/sepay/webhook', [\App\Http\Controllers\Api\SePayWebhookController::class, 'handle']);
 
 // Authenticated Routes
 Route::middleware('auth:sanctum')->group(function () {

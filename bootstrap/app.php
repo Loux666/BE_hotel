@@ -20,4 +20,18 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withExceptions(function (Exceptions $exceptions) {
         //
-    })->create();
+    })
+    ->withSchedule(function ($schedule) {
+        // 1. Dọn dẹp RoomHolds hết hạn mỗi phút
+        $schedule->call(function () {
+            app(\App\Services\RoomHoldService::class)->cleanupExpiredHolds();
+        })->everyMinute();
+
+        // 2. Hủy các Booking pending hết hạn mỗi phút
+        $schedule->call(function () {
+            \App\Models\Booking::where('status', 'pending')
+                ->where('expired_at', '<', now())
+                ->update(['status' => 'cancelled']);
+        })->everyMinute();
+    })
+    ->create();

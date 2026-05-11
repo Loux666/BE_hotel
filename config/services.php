@@ -42,4 +42,11 @@ return [
         'return_url_cart' => env('VNPAY_RETURN_URL_CART'),
     ],
 
+    'sepay' => [
+        'api_token' => env('SEPAY_API_TOKEN'),
+        'account_number' => env('SEPAY_ACCOUNT_NUMBER'),
+        'bank_code' => env('SEPAY_BANK_CODE'),
+        'bank_name' => env('SEPAY_BANK_NAME'),
+    ],
+
 ];

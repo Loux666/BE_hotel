@@ -113,12 +113,17 @@ class BookingService
                 for ($date = $start->copy(); $date->lt($end); $date->addDay()) {
                     $dateString = $date->toDateString();
                     
-                    // 1. Đếm số lượng đã đặt thực tế trong DB
+                    // 1. Đếm số lượng đã đặt thực tế trong DB - Bỏ qua các đơn pending của chính user này
                     $bookedCount = BookingDetail::where('room_id', $item->room_id)
                         ->where('checkin', '<=', $dateString)
                         ->where('checkout', '>', $dateString)
-                        ->whereHas('booking', function ($query) {
-                            $query->where('status', '!=', 'cancelled');
+                        ->whereHas('booking', function ($query) use ($userId) {
+                            $query->where('status', '!=', 'cancelled')
+                                  ->where(function($q) use ($userId) {
+                                      // Chỉ đếm nếu không phải là đơn pending của chính user này
+                                      $q->where('status', '!=', 'pending')
+                                        ->orWhere('user_id', '!=', $userId);
+                                  });
                         })
                         ->count();
 
@@ -160,18 +165,39 @@ class BookingService
 
             $calculation = $this->calculatePrice($totalBasePrice, $data['coupon_code'] ?? null, $userId);
 
-            $booking = Booking::create([
-                'user_id' => $userId,
-                'guest_name' => $data['guest_name'],
-                'guest_email' => $data['guest_email'],
-                'guest_phone' => $data['guest_phone'] ?? null,
-                'requests' => $data['requests'] ?? null,
-                'number_of_guests' => collect($details)->sum('number_of_guests'),
-                'total_price' => $calculation['final_total'],
-                'status' => 'pending',
-                'payment_status' => 'unpaid',
-                'expired_at' => now()->addMinutes(20),
-            ]);
+            // 4. Reuse existing pending booking if available
+            $booking = Booking::where('user_id', $userId)
+                ->where('status', 'pending')
+                ->where('payment_status', 'unpaid')
+                ->first();
+
+            if ($booking) {
+                // Xóa details cũ để tạo lại theo giỏ hàng mới
+                $booking->booking_details()->delete();
+                
+                $booking->update([
+                    'guest_name' => $data['guest_name'],
+                    'guest_email' => $data['guest_email'],
+                    'guest_phone' => $data['guest_phone'] ?? null,
+                    'requests' => $data['requests'] ?? null,
+                    'number_of_guests' => collect($details)->sum('number_of_guests'),
+                    'total_price' => $calculation['final_total'],
+                    'expired_at' => now()->addMinutes(20),
+                ]);
+            } else {
+                $booking = Booking::create([
+                    'user_id' => $userId,
+                    'guest_name' => $data['guest_name'],
+                    'guest_email' => $data['guest_email'],
+                    'guest_phone' => $data['guest_phone'] ?? null,
+                    'requests' => $data['requests'] ?? null,
+                    'number_of_guests' => collect($details)->sum('number_of_guests'),
+                    'total_price' => $calculation['final_total'],
+                    'status' => 'pending',
+                    'payment_status' => 'unpaid',
+                    'expired_at' => now()->addMinutes(20),
+                ]);
+            }
 
             foreach ($details as $detail) {
                 $detail['booking_id'] = $booking->id;

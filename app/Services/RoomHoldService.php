@@ -30,13 +30,27 @@ class RoomHoldService
             $checkin = $data['checkin'] ?? $data['checkin_date'];
             $checkout = $data['checkout'] ?? $data['checkout_date'];
 
-            // 1. Kiểm tra giới hạn hold / user
-            $this->checkUserHoldLimit($userId);
+            // 1. Kiểm tra giới hạn hold / user (Chỉ đếm các phòng khác phòng đang định đặt)
+            $this->checkUserHoldLimit($userId, $roomId);
 
-            // 2. Kiểm tra tính khả dụng (Booking + Active Holds)
-            $this->validateAvailability($roomId, $checkin, $checkout);
+            // 2. Kiểm tra tính khả dụng (Booking + Active Holds của người khác)
+            $this->validateAvailability($roomId, $checkin, $checkout, $userId);
 
-            // 3. Tạo hold record
+            // 3. Tái sử dụng hold cũ nếu có cho cùng phòng này
+            $existingHold = RoomHold::where('user_id', $userId)
+                ->where('room_id', $roomId)
+                ->first();
+
+            if ($existingHold) {
+                $existingHold->update([
+                    'checkin'    => $checkin,
+                    'checkout'   => $checkout,
+                    'expires_at' => now()->addMinutes(self::HOLD_TTL_MINUTES),
+                ]);
+                return $existingHold;
+            }
+
+            // 4. Tạo hold record mới
             return RoomHold::create([
                 'user_id'    => $userId,
                 'room_id'    => $roomId,
@@ -51,9 +65,10 @@ class RoomHoldService
     /**
      * Check if user has exceeded the maximum number of active holds
      */
-    protected function checkUserHoldLimit(int $userId)
+    protected function checkUserHoldLimit(int $userId, int $roomId)
     {
         $currentHolds = RoomHold::where('user_id', $userId)
+            ->where('room_id', '!=', $roomId) // Không tính chính phòng đang thao tác
             ->where('expires_at', '>', now())
             ->count();
 
@@ -68,7 +83,7 @@ class RoomHoldService
     /**
      * Validate room availability considering confirmed bookings and active holds
      */
-    protected function validateAvailability(int $roomId, string $checkin, string $checkout)
+    protected function validateAvailability(int $roomId, string $checkin, string $checkout, int $userId = null)
     {
         // Sử dụng lockForUpdate để chặn các transaction khác đọc/ghi vào Room này 
         // cho đến khi transaction hiện tại kết thúc (commit/rollback)
@@ -90,9 +105,9 @@ class RoomHoldService
                 })
                 ->count();
 
-            // Đếm số lượng đang được giữ (active holds)
-            // Dùng lockForUpdate ở đây nếu cần thiết, nhưng lock Room ở trên đã bao quát toàn bộ logic availability của room này
+            // Đếm số lượng đang được giữ (active holds) - Bỏ qua của chính user này
             $activeHolds = RoomHold::where('room_id', $roomId)
+                ->where('user_id', '!=', $userId)
                 ->where('expires_at', '>', now())
                 ->where('checkin', '<=', $dateString)
                 ->where('checkout', '>', $dateString)
@@ -156,5 +171,13 @@ class RoomHoldService
             Log::warning("[BOT_DETECT] User #{$userId} IP {$ip} score={$score}");
             throw new Exception('Phát hiện hành vi bất thường. Vui lòng thử lại sau.', 429);
         }
+    }
+
+    /**
+     * Cleanup all expired holds (Called by Cronjob)
+     */
+    public function cleanupExpiredHolds(): int
+    {
+        return RoomHold::where('expires_at', '<', now())->delete();
     }
 }

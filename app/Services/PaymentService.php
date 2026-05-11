@@ -8,10 +8,12 @@ use App\Models\Payment;
 use App\Models\RoomAvailability;
 use App\Models\Coupon;
 use App\Models\CouponUsage;
+use App\Models\RoomHold;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use App\Mail\BookingSuccessMail;
 use Carbon\Carbon;
 
@@ -63,6 +65,77 @@ class PaymentService
 
         $vnpSecureHash = hash_hmac('sha512', $hashdata, $vnp_HashSecret);
         return $vnp_Url . "?" . http_build_query($inputData) . '&vnp_SecureHash=' . $vnpSecureHash;
+    }
+
+    /**
+     * Generate SePay Payment Info (VietQR)
+     */
+    public function createSePayInfo(Booking $booking)
+    {
+        $apiToken = config('services.sepay.api_token');
+        
+        // 1. Get Bank Info (Try from config first, then API)
+        $bankAccount = config('services.sepay.account_number');
+        $bankCode = config('services.sepay.bank_code');
+        $bankName = config('services.sepay.bank_name');
+
+        if (!$bankAccount || !$bankCode) {
+            $bankInfo = $this->getSePayBankInfo($apiToken);
+            if ($bankInfo) {
+                $bankAccount = $bankInfo['account_number'];
+                $bankCode = $bankInfo['bank_code'];
+                $bankName = $bankInfo['bank_name'];
+            }
+        }
+
+        if (!$bankAccount || !$bankCode) {
+            throw new \Exception('Chưa cấu hình tài khoản ngân hàng SePay.');
+        }
+
+        $amount = floor($booking->total_price);
+        $description = "BK" . $booking->id;
+
+        $qrUrl = "https://qr.sepay.vn/img?acc={$bankAccount}&bank={$bankCode}&amount={$amount}&des={$description}";
+
+        return [
+            'qr_url' => $qrUrl,
+            'bank_account' => $bankAccount,
+            'bank_name' => $bankName,
+            'amount' => $amount,
+            'description' => $description,
+        ];
+    }
+
+    /**
+     * Fetch bank account list from SePay API
+     */
+    protected function getSePayBankInfo($apiToken)
+    {
+        return Cache::remember('sepay_bank_info', 3600, function () use ($apiToken) {
+            try {
+                $response = Http::withToken($apiToken)
+                    ->get('https://userapi.sepay.vn/v2/bank-accounts');
+
+                if ($response->successful()) {
+                    $json = $response->json();
+                    if (isset($json['status']) && $json['status'] === 'success') {
+                        $accounts = $json['data'] ?? [];
+                        if (!empty($accounts)) {
+                            // Pick the first active account
+                            $acc = $accounts[0];
+                            return [
+                                'account_number' => $acc['account_number'],
+                                'bank_code' => $acc['bank_code'],
+                                'bank_name' => $acc['bank_short_name']
+                            ];
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                Log::error('SePay API Error: ' . $e->getMessage());
+            }
+            return null;
+        });
     }
 
     /**
