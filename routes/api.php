@@ -22,6 +22,7 @@ Route::post('/rooms/{id}/check-availability', [\App\Http\Controllers\Api\RoomApi
 
 // Search Suggestions
 Route::get('/search/suggestions', [\App\Http\Controllers\Api\SearchApiController::class, 'suggestions']);
+Route::get('/search/cities', [\App\Http\Controllers\Api\SearchApiController::class, 'cities']);
 
 // Feedback (Public view)
 Route::get('/feedback', [FeedbackApiController::class, 'index']);

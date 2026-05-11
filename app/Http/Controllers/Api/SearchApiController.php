@@ -16,18 +16,15 @@ class SearchApiController extends Controller
      */
     public function suggestions(Request $request)
     {
-        $query = $request->get('query');
+        // ... (giữ nguyên hoặc xóa nếu muốn dùng hoàn toàn local)
+    }
 
-        if (empty($query)) {
-            return $this->success([], 'Empty query');
-        }
-
-        $results = Hotel::where('hotel_name', 'like', '%' . $query . '%')
-            ->orWhere('hotel_address', 'like', '%' . $query . '%')
-            ->orWhere('hotel_city', 'like', '%' . $query . '%')
-            ->limit(5)
-            ->get(['id', 'hotel_name', 'hotel_address', 'hotel_city', 'hotel_image']);
-
-        return $this->success($results, 'Lấy gợi ý tìm kiếm thành công');
+    /**
+     * Get all unique cities for local filtering
+     */
+    public function cities()
+    {
+        $cities = Hotel::distinct()->pluck('hotel_city');
+        return $this->success($cities, 'Lấy danh sách thành phố thành công');
     }
 }
